@@ -1,0 +1,289 @@
+#roles=Generosity
+
+### Change variables in the next few lines yearly or as needed ########
+yr1 = 2025
+annual1 = 391
+annual2 = 383
+annual3 = 368
+annual4 = 314
+endwell1 = 412
+endwell2 = 407
+endwell3 = 386
+endwell4 = 376
+designated = 42
+impact_fs = 21
+mocking_fs = 18
+beyond_fs = 4
+#totalhp_fs = ??
+#######################################################################
+
+model.Title = 'Individual Summary'
+
+blueToolbarList = q.BlueToolbarReport()
+
+listToSort = ''
+for person in blueToolbarList:
+    listToSort = listToSort + str(person.PeopleId) + ','
+trimmedList = listToSort[:-1]
+
+Data.yr1 = str(yr1)
+Data.yr2 = str(yr1-1)
+Data.yr3 = str(yr1-2)
+Data.yr4 = str(yr1-3)
+
+people = '''
+select PeopleId
+from dbo.People
+where PeopleId in ( select Value from dbo.SplitInts({0}) )
+order by LastName, PreferredName
+'''
+
+sortedList = q.QuerySql(people.format(trimmedList))
+
+givingSet = '128488,101708,101706,101705,128472,101703,101707,101704,128401,128492,128491,128494,101601,101586,128471,128489,101691,101697,101692,128473'
+worshipSet = '94760,94761,94762,94763,94734,94736,94717,94759,94752,94751,94757,94758,94779,94778,94777,94788,94772,94773,94774,94775,94766,94769,94770,94771,94767,94768,94764,94765,94781,94780,94776,94783,94711,94719,94721,94723,94706,94713,94714,94684,93708,94703,94704,94709,94750,94733,94735,94784,94726,94729,94718,94728,94725,94720,94724,94727,94699,94705,94678,94707,94732,94731,94730,9478'
+servingSet = '124172,124178,122059,124403,123943,124395,124398,124397,124184,124179'
+
+es_total = '''
+select sum(Points) from dbo.Query where StatusFlag = 1 and AutoId in (select Value from dbo.SplitInts('{0}'))
+'''
+Data.esGivingTotal = q.QuerySqlInt(es_total.format(givingSet))
+Data.esWorshipTotal = q.QuerySqlInt(es_total.format(worshipSet))
+Data.esServingTotal = q.QuerySqlInt(es_total.format(servingSet))
+
+campus = '''
+select Description from lookup.Campus where Id = @p1
+'''
+
+phones = '''
+select dbo.FmtPhone(CellPhone) Cell, dbo.FmtPhone(HomePhone) Home
+from dbo.People
+where PeopleId = @p1
+'''
+
+decSpouse = '''
+select
+	sp.Name,
+	format(sp.DeceasedDate, 'M/d/yyyy') ddate
+from dbo.People sp
+where sp.FamilyId = @p1
+and sp.PositionInFamilyId = 10
+and sp.IsDeceased = 1
+'''
+
+venues = '''
+declare @venues nvarchar(120) = 'SANCTUARY,CORNERSTONE'
+select stuff( (select ', ' + Value 
+    from dbo.split(@venues, ',')
+    where Value in ( select Name from dbo.StatusFlagsPerson(@p1) ) 
+    for xml path('') ), 1, 2, '') as value
+'''
+
+children = '''
+select p.PeopleId, p.Name, p.Age
+from dbo.People p
+where p.FamilyId = @p1
+    and p.PositionInFamilyId IN (20,30)
+order by p.Age desc
+'''
+
+engagement = '''
+select p.PeopleId, o.OrganizationName class
+from dbo.People p
+	join dbo.OrganizationMembers om on om.PeopleId = p.PeopleId
+	join dbo.Organizations o on o.OrganizationId = om.OrganizationId
+where p.FamilyId = @p1
+	and p.PositionInFamilyId IN (20,30)
+	and om.OrganizationId in (select OrgId from dbo.DivOrg where DivId in (328,125,64))
+order by p.PeopleId, o.OrganizationName
+'''
+
+relfamily = '''
+;with fams as (
+select case when FamilyId = @p1 then RelatedFamilyId else FamilyId end RelatedId, FamilyRelationshipDesc
+from dbo.RelatedFamilies
+where @p1 in (FamilyId, RelatedFamilyId)
+)
+select
+	fams.RelatedId,
+	h.Name FamilyName,
+	fams.FamilyRelationshipDesc
+from fams
+join dbo.Families f on f.FamilyId = fams.RelatedId
+join dbo.People h on h.PeopleId = f.HeadOfHouseholdId
+'''
+
+relmembers = '''
+;with fams as (
+select case when FamilyId = @p1 then RelatedFamilyId else FamilyId end RelatedId
+from dbo.RelatedFamilies
+where @p1 in (FamilyId, RelatedFamilyId)
+)
+select distinct
+	p.FamilyId,
+	p.Name,
+	format(p.DeceasedDate, 'M/d/yyyy') DeceasedDate,
+	p.PositionInFamilyId,
+	p.Age
+from fams
+join dbo.People p on p.FamilyId = fams.RelatedId
+order by p.PositionInFamilyId asc, p.Age desc
+'''
+
+engagementscore = '''
+select
+	total = isnull(sum(total.Score),0),
+	giving = isnull(sum(giving.Score),0),
+	worship = isnull(sum(worship.Score),0),
+	serving = isnull(sum(serving.Score),0)
+from dbo.EngagementScoreTag total
+left join dbo.EngagementScoreTag giving on giving.Id = total.Id
+										and giving.StatusFlagId in (select Value from dbo.SplitInts('{0}'))
+left join dbo.EngagementScoreTag worship on worship.Id = total.Id
+										and worship.StatusFlagId in (select Value from dbo.SplitInts('{1}'))
+left join dbo.EngagementScoreTag serving on serving.Id = total.Id
+										and serving.StatusFlagId in (select Value from dbo.SplitInts('{2}'))
+where total.EngagementScoreId = (select es.Id from dbo.EngagementScore es where PeopleId = @p1
+												and convert(date, WeekDate) = dbo.SundayForDate(getdate()) )
+'''
+
+giving = '''
+;with allgiving as (
+select CreditGiverId, CreditGiverId2, FundId, PledgeAmount, Amount, year(Date) Yr
+from dbo.Contributions2(null, null, 0, 1, null, 1, null)
+where @PeopleId in (CreditGiverId, CreditGiverId2)
+)
+select
+	isnull(sum(Amount),0) [total],
+	(select isnull(sum(PledgeAmount),0) from allgiving where FundId = @annual1) [annual1pledge],
+	(select isnull(sum(Amount),0) from allgiving where FundId = @annual1) [annual1giving],
+	(select isnull(sum(Amount),0) from allgiving where FundId = @annual2) [annual2giving],
+	(select isnull(sum(Amount),0) from allgiving where FundId = @annual3) [annual3giving],
+	(select isnull(sum(Amount),0) from allgiving where FundId = @annual4) [annual4giving],
+	(select isnull(sum(Amount),0) from allgiving where FundId = @designated and Yr = @yr1) [desig1giving],
+	(select isnull(sum(Amount),0) from allgiving where FundId = @designated and Yr = @yr1-1) [desig2giving],
+	(select isnull(sum(Amount),0) from allgiving where FundId = @designated and Yr = @yr1-2) [desig3giving],
+	(select isnull(sum(Amount),0) from allgiving where FundId = @designated and Yr = @yr1-3) [desig4giving],
+	(select isnull(sum(Amount),0) from allgiving where FundId = @endwell1 or FundId in 
+			(select FundId from dbo.FundSetFunds where FundSetId = @impact_fs) and Yr = @yr1) [impact1giving],
+	(select isnull(sum(Amount),0) from allgiving where FundId = @endwell2 or FundId in 
+			(select FundId from dbo.FundSetFunds where FundSetId = @impact_fs) and Yr = @yr1-1) [impact2giving],
+	(select isnull(sum(Amount),0) from allgiving where FundId = @endwell3 or FundId in 
+			(select FundId from dbo.FundSetFunds where FundSetId = @impact_fs) and Yr = @yr1-2) [impact3giving],
+	(select isnull(sum(Amount),0) from allgiving where FundId = @endwell4 or FundId in 
+			(select FundId from dbo.FundSetFunds where FundSetId = @impact_fs) and Yr = @yr1-3) [impact4giving],
+	(select isnull(sum(Amount),0) from allgiving where FundId in 
+			(select FundId from dbo.FundSetFunds where FundSetId = @mocking_fs) ) [mockinggiving],
+	(select isnull(sum(Amount),0) from allgiving where FundId in 
+			(select FundId from dbo.FundSetFunds where FundSetId = @beyond_fs) ) [beyondgiving],
+	(select top 1 Name from dbo.StatusFlagsPerson(@PeopleId) where Flag in (91305,132688,132793,138846) ) [donorlevel]
+from allgiving
+--where FundId in (select FundId from dbo.FundSetFunds where FundSetId = @totalhp_fs)
+'''
+
+involvement = '''
+select 
+	la.lastattend, 
+	la.OrganizationName lastattendorg
+from dbo.LastAttends la
+where la.PeopleId = @p1
+'''
+
+leaderorgs = '''
+select 
+	o.OrganizationName name,
+	mt.Description role
+from dbo.Organizations o
+	join dbo.OrganizationMembers om on om.OrganizationId = o.OrganizationId
+	join dbo.DivOrg do on do.OrgId = o.OrganizationId
+	join lookup.MemberType mt on mt.Id = om.MemberTypeId
+where om.PeopleId = @p1 and do.DivId in (1371)
+order by o.OrganizationName
+'''
+
+sgcorgs = '''
+;with combo as (
+select 
+	o.OrganizationName name,
+	o.OrganizationTypeId type,
+	format(om.LastAttended, 'M/d/yy') lastattend,
+	format(om.EnrollmentDate, 'M/d/yy') enrolled
+from dbo.Organizations o
+	join dbo.OrganizationMembers om on om.OrganizationId = o.OrganizationId
+where om.PeopleId = @p1 and o.OrganizationTypeId in (20,30,50)
+
+UNION
+
+select
+	et.OrganizationName name,
+	o.OrganizationTypeId type,
+	dbo.LastAttend(et.OrganizationId, @p1) lastattend,
+	et.EnrollmentDate enrolled
+from dbo.EnrollmentTransaction et
+	join dbo.Organizations o on o.OrganizationId = et.OrganizationId
+where et.PeopleId = @p1 and et.TransactionTypeId = 5
+	and o.OrganizationTypeId in (20,30,50)
+	and et.TransactionDate = (select max(TransactionDate) from dbo.EnrollmentTransaction where PeopleId = et.PeopleId
+								and OrganizationId = et.OrganizationId and TransactionTypeId = et.TransactionTypeId)
+)
+select * from combo
+order by coalesce(lastattend,enrolled) desc
+'''
+
+notes = '''
+select
+	format(coalesce(CompletedDate,ModifiedDate,CreatedDate), 'M/d/yyyy') Date,
+	Notes
+from dbo.TaskNote tn
+where tn.AboutPersonId = @p1
+	and exists (select null from dbo.TaskNoteKeyword where TaskNoteId = tn.TaskNoteId and KeywordId = 278)
+order by coalesce(CompletedDate,ModifiedDate,CreatedDate) desc
+'''
+
+count = len(sortedList)
+current = 0
+for p in sortedList:
+    current += 1
+    if current == count:
+        Data.last = 1
+    Data.person = model.GetPerson(p.PeopleId)
+    Data.spouse = model.GetPerson(Data.person.SpouseId)
+    if Data.person.MaritalStatusId == 50 and Data.person.PositionInFamilyId == 10:
+        Data.decSpouse = q.QuerySqlTop1(decSpouse, Data.person.FamilyId)
+    Data.campus = q.QuerySqlTop1(campus, Data.person.CampusId)
+    Data.phones = q.QuerySqlTop1(phones, p.PeopleId)
+    Data.venues = q.QuerySqlTop1(venues, p.PeopleId)
+    Data.children = q.QuerySql(children, Data.person.FamilyId)
+    Data.engagement = q.QuerySql(engagement, Data.person.FamilyId)
+    Data.relfamily = q.QuerySql(relfamily, Data.person.FamilyId)
+    Data.relmember = q.QuerySql(relmembers, Data.person.FamilyId)
+    if (model.UserIsInRole("ESCORES")):
+        Data.escoresrole = 1
+        Data.es = q.QuerySqlTop1(engagementscore.format(givingSet,worshipSet,servingSet), p.PeopleId)
+    if (model.UserIsInRole("Finance")):
+        Data.financerole = 1
+        params = { 'PeopleId'   : p.PeopleId,
+                   'yr1'        : yr1,
+                   'annual1'    : annual1,
+                   'annual2'    : annual2,
+                   'annual3'    : annual3,
+                   'annual4'    : annual4,
+                   'endwell1'   : endwell1,
+                   'endwell2'   : endwell2,
+                   'endwell3'   : endwell3,
+                   'endwell4'   : endwell4,
+                   'designated' : designated,
+                   'impact_fs'  : impact_fs,
+                   'mocking_fs' : mocking_fs,
+                   'beyond_fs'  : beyond_fs,
+                #  'totalhp_fs' : totalhp_fs 
+                 }
+        Data.giving = q.QuerySqlTop1(giving, None, params)
+    Data.inv = q.QuerySqlTop1(involvement, p.PeopleId)
+    Data.leaderorgs = q.QuerySql(leaderorgs, p.PeopleId)
+    Data.sgcorgs = q.QuerySql(sgcorgs, p.PeopleId)
+    if (model.UserIsInRole("Generosity")):
+        Data.generosityrole = 1
+        Data.conn = q.QuerySql(notes, p.PeopleId)
+    template = model.Content('IndividualSummaryReportHtml')
+    print model.RenderTemplate(template)

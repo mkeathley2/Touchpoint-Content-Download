@@ -1,0 +1,47 @@
+#Roles=Finance
+
+model.CallScript ('HPBirthdayEmails')
+model.CallScript ('MailChimpSync')
+
+## Run script to Open Classrooms for CheckinDashboard on Sundays. 
+## Added by MAK 3/18/25
+if model.DayOfWeek == 0 :
+    model.CallScript("Open Sunday HPKids Meetings")
+##
+
+
+
+
+####
+model.CreateQueryTag('GivingForecast-Members', 
+    'FamHasPrimAdultChurchMemb = 1 AND IncludeDeceased = 1')
+
+model.CreateQueryTag('GivingForecast-ActiveNonMembers', 
+'''
+    ( 
+        RecentFamilyAdultLastAttend( Days=365 ) = 1 
+        OR IsFamilyGiver( Days=365 ) = 1
+    ) 
+    AND FamHasPrimAdultChurchMemb = 0 
+    AND IncludeDeceased = 1
+''')
+
+Sql = model.SqlContent('GivingForecast')
+
+data = q.SqlFirstColumnRowKey(Sql, None)
+data.Created = model.DateTime.ToString('g') # record when data was created
+
+savedata = model.FormatJson(data)
+model.WriteContentText('GivingForecastData', savedata)
+model.CallScript("GivingForecastData")
+
+#Old Covid Script. Removed by MAK 12.16.24
+#model.CallScript("COVID19ScreeningDropMembers")
+
+print '<pre>'
+print savedata
+print '</pre>'
+
+# the following is only used in development 
+#Sql = model.Content('C:/dev/bvcmsdocs/source/CustomProgramming/Python/Scripts/Giving/Forecast/Files/Content/GivingForecast.sql')
+#runfrom=C:/dev/bvcmsdocs/source/CustomProgramming/Python/Scripts/Giving/Forecast/Files/Content/GivingForecastData.py
